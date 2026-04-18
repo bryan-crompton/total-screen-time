@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "screentime"
+version = "0.1.0"
+description = "Personal cross-device screen time tracker"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn>=0.27",
+  "requests>=2.31",
+  "pydantic>=2.6"
+]
+
+[project.scripts]
+screentime-ubuntu-monitor = "screentime.ubuntu.monitor:main"
+screentime-server = "screentime.server.app:run"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["screentime", "screentime.*"]
+namespaces = false
