@@ -62,8 +62,23 @@ def row_to_interval(row: sqlite3.Row) -> Interval:
         last_synced_at=None if row["last_synced_at"] is None else str_to_dt(row["last_synced_at"]),
     )
 
-
 def upsert_interval(conn: sqlite3.Connection, interval: Interval):
+    existing = conn.execute(
+        """
+        SELECT last_synced_at
+        FROM activity_intervals
+        WHERE interval_id = ?
+        """,
+        (interval.interval_id,),
+    ).fetchone()
+
+    if interval.last_synced_at is None and existing is not None:
+        last_synced_at_str = existing["last_synced_at"]
+    else:
+        last_synced_at_str = (
+            None if interval.last_synced_at is None else dt_to_str(interval.last_synced_at)
+        )
+
     conn.execute(
         """
         INSERT INTO activity_intervals (
@@ -90,10 +105,11 @@ def upsert_interval(conn: sqlite3.Connection, interval: Interval):
             int(interval.is_open),
             dt_to_str(interval.updated_at),
             interval.sync_status,
-            None if interval.last_synced_at is None else dt_to_str(interval.last_synced_at),
+            last_synced_at_str,
         ),
     )
     conn.commit()
+
 
 
 def get_open_interval(conn: sqlite3.Connection) -> Optional[Interval]:

@@ -12,8 +12,8 @@ SERVICE_FILE="${USER_SYSTEMD_DIR}/${SERVICE_NAME}"
 DATA_DIR="${HOME}/.local/share/screentime"
 
 command -v pipx >/dev/null 2>&1 || {
-  echo "pipx not found on PATH" >&2
-  exit 1
+    echo "pipx not found on PATH" >&2
+    exit 1
 }
 
 mkdir -p "${USER_SYSTEMD_DIR}"
@@ -31,8 +31,8 @@ PIPX_BIN_DIR="$(pipx environment --value PIPX_BIN_DIR)"
 PIPX_VENV="${PIPX_HOME}/venvs/${APP_NAME}"
 
 [[ -x "${PIPX_BIN_DIR}/${ENTRYPOINT}" ]] || {
-  echo "Missing entrypoint: ${PIPX_BIN_DIR}/${ENTRYPOINT}" >&2
-  exit 1
+    echo "Missing entrypoint: ${PIPX_BIN_DIR}/${ENTRYPOINT}" >&2
+    exit 1
 }
 
 "${PIPX_VENV}/bin/python" -c "import screentime, screentime.ubuntu.monitor; print('import ok:', screentime.__file__)"

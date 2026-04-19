@@ -13,6 +13,8 @@ def utc_now() -> datetime:
 
 
 def dt_to_str(dt: datetime) -> str:
+    if dt is None:
+        return None
     if dt.tzinfo is None:
         raise ValueError("datetime must be timezone-aware")
     return dt.astimezone(timezone.utc).strftime(TIME_FMT)
