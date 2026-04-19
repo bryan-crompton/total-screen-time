@@ -8,7 +8,7 @@ Type=simple
 Environment=PATH=%h/.local/bin:/usr/bin:/bin
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
 Environment=SCREENTIME_DB_PATH=%h/.local/share/screentime/screentime.db
-Environment=SCREENTIME_SERVER_URL=http://127.0.0.1:8000
+Environment=SCREENTIME_SERVER_URL=http://127.0.0.1:7777
 Environment=SCREENTIME_ACTIVITY_THRESHOLD=15
 Environment=SCREENTIME_POLL_INTERVAL=5
 Environment=SCREENTIME_GAP_TIMEOUT=30

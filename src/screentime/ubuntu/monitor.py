@@ -31,7 +31,7 @@ class Config:
     )
     server_url: str = os.environ.get(
         "SCREENTIME_SERVER_URL",
-        "http://127.0.0.1:8000",
+        "http://127.0.0.1:7777",
     )
     host: str = os.environ.get("SCREENTIME_HOST", socket.gethostname())
     device_type: str = "ubuntu"

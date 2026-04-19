@@ -33,7 +33,7 @@ def batch_upsert(req: BatchUpsertRequest) -> BatchUpsertResponse:
 
 def run():
     host = os.environ.get("SCREENTIME_SERVER_HOST", "0.0.0.0")
-    port = int(os.environ.get("SCREENTIME_SERVER_PORT", "8000"))
+    port = int(os.environ.get("SCREENTIME_SERVER_PORT", "7777"))
     uvicorn.run("screentime.server.app:app", host=host, port=port, reload=False)
 
 

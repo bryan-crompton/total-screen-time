@@ -38,13 +38,13 @@ screentime-server
 or
 
 ```bash
-uvicorn screentime.server.app:app --host 0.0.0.0 --port 8000
+uvicorn screentime.server.app:app --host 0.0.0.0 --port 7777
 ```
 
 ## Run the Ubuntu client
 
 ```bash
-export SCREENTIME_SERVER_URL="http://YOUR_SERVER_IP:8000"
+export SCREENTIME_SERVER_URL="http://YOUR_SERVER_IP:7777"
 screentime-ubuntu-monitor
 ```
 
@@ -54,3 +54,23 @@ screentime-ubuntu-monitor
 - The client stores only active intervals.
 - The sync worker runs in a separate thread with its own SQLite connection.
 - On startup, any locally open interval is conservatively closed at its last known end time.
+
+
+## Install the client service
+
+```bash
+./scripts/install_client.sh
+```
+
+This script:
+- installs the app with system pipx
+- prompts for the sync server IP or hostname
+- writes the user systemd service
+- enables and starts the service
+
+## Run the server with Docker Compose
+
+```bash
+docker compose up --build -d
+curl http://127.0.0.1:7777/health
+```
