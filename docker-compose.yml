@@ -9,5 +9,5 @@ services:
       SCREENTIME_SERVER_HOST: 0.0.0.0
       SCREENTIME_SERVER_PORT: 7777
     volumes:
-      - ./server_data:/data
+      - ./containers/screentime/data:/data
     restart: unless-stopped
