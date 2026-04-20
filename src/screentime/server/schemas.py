@@ -28,7 +28,7 @@ class BatchUpsertResponse(BaseModel):
     results: list[IntervalResult]
 
 
-class IntervalRecord(BaseModel):
+class IntervalOut(BaseModel):
     interval_id: str
     host: str
     device_type: str
@@ -37,40 +37,41 @@ class IntervalRecord(BaseModel):
     is_open: bool
     updated_at: str
     received_at: str
-    clipped_start_time: str | None = None
-    clipped_end_time: str | None = None
-    clipped_seconds: int | None = None
+    clipped_start_time: str
+    clipped_end_time: str
+    duration_seconds: int
 
 
-class DeviceTotal(BaseModel):
+class SummaryBucket(BaseModel):
+    key: str
+    seconds: int
+    hours: float
+    interval_count: int = 0
+
+
+class DeviceSummary(BaseModel):
+    host: str
     device_type: str
     seconds: int
+    hours: float
+    interval_count: int
+    first_active_utc: str | None = None
+    last_active_utc: str | None = None
 
 
-class HostTotal(BaseModel):
-    host: str
-    seconds: int
-
-
-class DaySummary(BaseModel):
+class DaySummaryResponse(BaseModel):
     day: str
-    unique_seconds: int
-    devices: list[DeviceTotal]
-
-
-class IntervalQueryResponse(BaseModel):
-    range_start: str
-    range_end: str
+    day_start_utc: str
+    day_end_utc: str
+    host_filter: str | None = None
+    device_type_filter: str | None = None
     interval_count: int
-    intervals: list[IntervalRecord]
-
-
-class IntervalSummaryResponse(BaseModel):
-    range_start: str
-    range_end: str
-    interval_count: int
-    total_unique_seconds: int
-    per_device: list[DeviceTotal]
-    per_host: list[HostTotal]
-    per_day: list[DaySummary]
-    intervals: list[IntervalRecord]
+    unique_total_seconds: int
+    unique_total_hours: float
+    summed_device_seconds: int
+    summed_device_hours: float
+    per_host: list[SummaryBucket]
+    per_device_type: list[SummaryBucket]
+    per_device: list[DeviceSummary]
+    timeline_hosts: list[str]
+    intervals: list[IntervalOut]

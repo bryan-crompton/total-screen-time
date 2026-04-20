@@ -1,231 +1,39 @@
 from __future__ import annotations
 
+import html
 import os
-from datetime import date, datetime, time, timedelta, timezone
+from collections import defaultdict
+from datetime import datetime
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 
 from screentime.server.db import (
-    DEFAULT_DB_PATH,
+    format_utc,
     get_conn,
-    get_intervals_overlapping,
     init_db,
-    summarize_intervals,
+    parse_utc,
+    fetch_intervals_for_day,
 )
 from screentime.server.schemas import (
     BatchUpsertRequest,
     BatchUpsertResponse,
-    IntervalQueryResponse,
+    DaySummaryResponse,
+    DeviceSummary,
+    IntervalOut,
     IntervalResult,
-    IntervalSummaryResponse,
+    SummaryBucket,
 )
-from screentime.server.db import upsert_interval
 
 init_db()
 
 app = FastAPI(title="screentime-server")
 
 
-DASHBOARD_HTML = """
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>Screen Time Dashboard</title>
-  <style>
-    body { font-family: sans-serif; margin: 24px; max-width: 1200px; }
-    h1, h2 { margin-bottom: 8px; }
-    .controls { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 12px; margin-bottom: 20px; }
-    .controls label { display: flex; flex-direction: column; font-size: 14px; gap: 4px; }
-    input, button { padding: 8px; font-size: 14px; }
-    .cards { display: grid; grid-template-columns: repeat(4, minmax(180px, 1fr)); gap: 12px; margin: 16px 0 24px; }
-    .card, .panel { border: 1px solid #ddd; border-radius: 10px; padding: 14px; background: #fff; }
-    .metric { font-size: 28px; font-weight: 700; }
-    .muted { color: #666; font-size: 13px; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    table { border-collapse: collapse; width: 100%; font-size: 14px; }
-    th, td { border-bottom: 1px solid #eee; padding: 8px; text-align: left; }
-    .chart-wrap { overflow-x: auto; }
-    svg text { font-size: 12px; fill: #333; }
-    .error { color: #b00020; margin-top: 12px; }
-    @media (max-width: 900px) {
-      .controls, .cards, .grid { grid-template-columns: 1fr; }
-    }
-  </style>
-</head>
-<body>
-  <h1>Screen Time Dashboard</h1>
-  <div class="controls">
-    <label>Start date<input id="startDate" type="date" /></label>
-    <label>End date<input id="endDate" type="date" /></label>
-    <label>Host filter<input id="host" type="text" placeholder="optional" /></label>
-    <label>Device filter<input id="device" type="text" placeholder="optional" /></label>
-    <label style="justify-content:flex-end;"><span>&nbsp;</span><button id="loadBtn">Load</button></label>
-  </div>
-
-  <div class="cards">
-    <div class="card"><div class="muted">Unique total</div><div id="uniqueTotal" class="metric">-</div></div>
-    <div class="card"><div class="muted">Intervals</div><div id="intervalCount" class="metric">-</div></div>
-    <div class="card"><div class="muted">Days in range</div><div id="dayCount" class="metric">-</div></div>
-    <div class="card"><div class="muted">Database path</div><div class="metric" style="font-size:14px; word-break:break-all;">__DB_PATH__</div></div>
-  </div>
-
-  <div class="grid">
-    <div class="panel">
-      <h2>Daily unique total</h2>
-      <div id="dailyChart" class="chart-wrap"></div>
-    </div>
-    <div class="panel">
-      <h2>Per-device total</h2>
-      <div id="deviceChart" class="chart-wrap"></div>
-    </div>
-  </div>
-
-  <div class="grid" style="margin-top:16px;">
-    <div class="panel">
-      <h2>Per-device totals</h2>
-      <table id="deviceTable"><thead><tr><th>Device</th><th>Hours</th></tr></thead><tbody></tbody></table>
-    </div>
-    <div class="panel">
-      <h2>Per-day breakdown</h2>
-      <table id="dayTable"><thead><tr><th>Day</th><th>Unique hours</th><th>By device</th></tr></thead><tbody></tbody></table>
-    </div>
-  </div>
-
-  <div id="error" class="error"></div>
-
-<script>
-function hoursLabel(seconds) {
-  return (seconds / 3600).toFixed(2);
-}
-
-function makeBarChart(items, labelKey, valueKey, width = 700, height = 260) {
-  if (!items.length) return '<div class="muted">No data</div>';
-  const padding = { top: 20, right: 20, bottom: 70, left: 60 };
-  const innerW = width - padding.left - padding.right;
-  const innerH = height - padding.top - padding.bottom;
-  const maxValue = Math.max(...items.map(x => x[valueKey]), 1);
-  const barWidth = innerW / items.length;
-  let bars = '';
-  let labels = '';
-  let yTicks = '';
-
-  for (let i = 0; i < 5; i++) {
-    const frac = i / 4;
-    const y = padding.top + innerH - frac * innerH;
-    const value = maxValue * frac;
-    yTicks += `<line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" stroke="#eee" />`;
-    yTicks += `<text x="${padding.left - 10}" y="${y + 4}" text-anchor="end">${hoursLabel(value)}</text>`;
-  }
-
-  items.forEach((item, idx) => {
-    const v = item[valueKey];
-    const h = (v / maxValue) * innerH;
-    const x = padding.left + idx * barWidth + 8;
-    const y = padding.top + innerH - h;
-    const w = Math.max(8, barWidth - 16);
-    bars += `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="#4f46e5" rx="4" />`;
-    bars += `<text x="${x + w/2}" y="${y - 6}" text-anchor="middle">${hoursLabel(v)}</text>`;
-    labels += `<text x="${x + w/2}" y="${height - 18}" text-anchor="end" transform="rotate(-35 ${x + w/2} ${height - 18})">${item[labelKey]}</text>`;
-  });
-
-  return `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${yTicks}${bars}${labels}</svg>`;
-}
-
-async function loadData() {
-  const errorEl = document.getElementById('error');
-  errorEl.textContent = '';
-  const startDate = document.getElementById('startDate').value;
-  const endDate = document.getElementById('endDate').value;
-  const host = document.getElementById('host').value.trim();
-  const device = document.getElementById('device').value.trim();
-
-  const start = `${startDate}T00:00:00Z`;
-  const endDateObj = new Date(`${endDate}T00:00:00Z`);
-  endDateObj.setUTCDate(endDateObj.getUTCDate() + 1);
-  const end = endDateObj.toISOString().slice(0, 19) + 'Z';
-
-  const params = new URLSearchParams({ start, end });
-  if (host) params.set('host', host);
-  if (device) params.set('device_type', device);
-
-  try {
-    const resp = await fetch(`/api/summary?${params.toString()}`);
-    if (!resp.ok) throw new Error(await resp.text());
-    const data = await resp.json();
-
-    document.getElementById('uniqueTotal').textContent = `${hoursLabel(data.total_unique_seconds)} h`;
-    document.getElementById('intervalCount').textContent = data.interval_count;
-    document.getElementById('dayCount').textContent = data.per_day.length;
-
-    document.getElementById('dailyChart').innerHTML = makeBarChart(
-      data.per_day.map(d => ({ label: d.day, value: d.unique_seconds })),
-      'label',
-      'value'
-    );
-    document.getElementById('deviceChart').innerHTML = makeBarChart(
-      data.per_device.map(d => ({ label: d.device_type, value: d.seconds })),
-      'label',
-      'value',
-      500,
-      260
-    );
-
-    const deviceBody = document.querySelector('#deviceTable tbody');
-    deviceBody.innerHTML = data.per_device
-      .map(d => `<tr><td>${d.device_type}</td><td>${hoursLabel(d.seconds)}</td></tr>`)
-      .join('');
-
-    const dayBody = document.querySelector('#dayTable tbody');
-    dayBody.innerHTML = data.per_day
-      .map(d => {
-        const deviceBits = d.devices.map(x => `${x.device_type}: ${hoursLabel(x.seconds)}h`).join(', ');
-        return `<tr><td>${d.day}</td><td>${hoursLabel(d.unique_seconds)}</td><td>${deviceBits}</td></tr>`;
-      })
-      .join('');
-  } catch (err) {
-    errorEl.textContent = String(err);
-  }
-}
-
-(function init() {
-  const end = new Date();
-  const start = new Date();
-  start.setUTCDate(end.getUTCDate() - 6);
-  document.getElementById('startDate').value = start.toISOString().slice(0, 10);
-  document.getElementById('endDate').value = end.toISOString().slice(0, 10);
-  document.getElementById('loadBtn').addEventListener('click', loadData);
-  loadData();
-})();
-</script>
-</body>
-</html>
-"""
-
-
-def _parse_range_or_400(start: str, end: str) -> tuple[str, str]:
-    try:
-        start_dt = datetime.strptime(start, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-        end_dt = datetime.strptime(end, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="start and end must be UTC timestamps like 2026-04-20T00:00:00Z") from exc
-
-    if end_dt <= start_dt:
-        raise HTTPException(status_code=400, detail="end must be after start")
-
-    return start, end
-
-
 @app.get("/health")
 def health() -> dict[str, bool]:
     return {"ok": True}
-
-
-@app.get("/", response_class=HTMLResponse)
-def dashboard() -> HTMLResponse:
-    return HTMLResponse(DASHBOARD_HTML.replace("__DB_PATH__", DEFAULT_DB_PATH))
 
 
 @app.post("/intervals/batch_upsert", response_model=BatchUpsertResponse)
@@ -234,6 +42,7 @@ def batch_upsert(req: BatchUpsertRequest) -> BatchUpsertResponse:
     try:
         results = []
         for interval in req.intervals:
+            from screentime.server.db import upsert_interval
             status = upsert_interval(conn, req.hostname, req.device_type, interval)
             results.append(IntervalResult(interval_id=interval.interval_id, status=status))
         return BatchUpsertResponse(results=results)
@@ -241,54 +50,476 @@ def batch_upsert(req: BatchUpsertRequest) -> BatchUpsertResponse:
         conn.close()
 
 
-@app.get("/api/intervals", response_model=IntervalQueryResponse)
-def api_intervals(
-    start: str = Query(..., description="UTC timestamp inclusive, e.g. 2026-04-01T00:00:00Z"),
-    end: str = Query(..., description="UTC timestamp exclusive, e.g. 2026-04-08T00:00:00Z"),
-    host: str | None = Query(None),
-    device_type: str | None = Query(None),
-    limit: int = Query(50000, ge=1, le=200000),
-) -> IntervalQueryResponse:
-    start, end = _parse_range_or_400(start, end)
-    conn = get_conn()
-    try:
-        intervals = get_intervals_overlapping(conn, start, end, host=host, device_type=device_type, limit=limit)
-        return IntervalQueryResponse(
-            range_start=start,
-            range_end=end,
-            interval_count=len(intervals),
-            intervals=intervals,
+def clip_segments(rows, day_start, day_end):
+    intervals: list[IntervalOut] = []
+    merged_segments: list[tuple[datetime, datetime]] = []
+    per_host_seconds: dict[str, int] = defaultdict(int)
+    per_host_count: dict[str, int] = defaultdict(int)
+    per_type_seconds: dict[str, int] = defaultdict(int)
+    per_type_count: dict[str, int] = defaultdict(int)
+    per_device_seconds: dict[tuple[str, str], int] = defaultdict(int)
+    per_device_count: dict[tuple[str, str], int] = defaultdict(int)
+    per_device_first: dict[tuple[str, str], datetime] = {}
+    per_device_last: dict[tuple[str, str], datetime] = {}
+    timeline_hosts: set[str] = set()
+
+    for row in rows:
+        start = max(parse_utc(row["start_time"]), day_start)
+        end = min(parse_utc(row["end_time"]), day_end)
+        if end <= start:
+            continue
+
+        seconds = int((end - start).total_seconds())
+        host = row["host"]
+        device_type = row["device_type"]
+        key = (host, device_type)
+        timeline_hosts.add(host)
+
+        intervals.append(
+            IntervalOut(
+                interval_id=row["interval_id"],
+                host=host,
+                device_type=device_type,
+                start_time=row["start_time"],
+                end_time=row["end_time"],
+                is_open=bool(row["is_open"]),
+                updated_at=row["updated_at"],
+                received_at=row["received_at"],
+                clipped_start_time=format_utc(start),
+                clipped_end_time=format_utc(end),
+                duration_seconds=seconds,
+            )
         )
-    finally:
-        conn.close()
+
+        per_host_seconds[host] += seconds
+        per_host_count[host] += 1
+        per_type_seconds[device_type] += seconds
+        per_type_count[device_type] += 1
+        per_device_seconds[key] += seconds
+        per_device_count[key] += 1
+        per_device_first[key] = min(start, per_device_first.get(key, start))
+        per_device_last[key] = max(end, per_device_last.get(key, end))
+
+        if not merged_segments or start > merged_segments[-1][1]:
+            merged_segments.append((start, end))
+        else:
+            merged_segments[-1] = (merged_segments[-1][0], max(merged_segments[-1][1], end))
+
+    unique_total_seconds = sum(int((end - start).total_seconds()) for start, end in merged_segments)
+    summed_device_seconds = sum(per_device_seconds.values())
+
+    per_host = [
+        SummaryBucket(
+            key=host,
+            seconds=seconds,
+            hours=round(seconds / 3600, 4),
+            interval_count=per_host_count[host],
+        )
+        for host, seconds in sorted(per_host_seconds.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    per_device_type = [
+        SummaryBucket(
+            key=device_type,
+            seconds=seconds,
+            hours=round(seconds / 3600, 4),
+            interval_count=per_type_count[device_type],
+        )
+        for device_type, seconds in sorted(per_type_seconds.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    per_device = [
+        DeviceSummary(
+            host=host,
+            device_type=device_type,
+            seconds=seconds,
+            hours=round(seconds / 3600, 4),
+            interval_count=per_device_count[(host, device_type)],
+            first_active_utc=format_utc(per_device_first[(host, device_type)]),
+            last_active_utc=format_utc(per_device_last[(host, device_type)]),
+        )
+        for (host, device_type), seconds in sorted(
+            per_device_seconds.items(), key=lambda item: (-item[1], item[0][0], item[0][1])
+        )
+    ]
+
+    intervals.sort(key=lambda interval: (interval.clipped_start_time, interval.clipped_end_time, interval.host))
+    return intervals, unique_total_seconds, summed_device_seconds, per_host, per_device_type, per_device, sorted(timeline_hosts)
 
 
-@app.get("/api/summary", response_model=IntervalSummaryResponse)
-def api_summary(
-    start: str = Query(..., description="UTC timestamp inclusive, e.g. 2026-04-01T00:00:00Z"),
-    end: str = Query(..., description="UTC timestamp exclusive, e.g. 2026-04-08T00:00:00Z"),
+@app.get("/api/day", response_model=DaySummaryResponse)
+def day_summary(
+    day: str = Query(..., description="UTC day in YYYY-MM-DD format"),
     host: str | None = Query(None),
     device_type: str | None = Query(None),
-    limit: int = Query(50000, ge=1, le=200000),
-) -> IntervalSummaryResponse:
-    start, end = _parse_range_or_400(start, end)
+) -> DaySummaryResponse:
     conn = get_conn()
     try:
-        intervals = get_intervals_overlapping(conn, start, end, host=host, device_type=device_type, limit=limit)
-        return IntervalSummaryResponse(**summarize_intervals(intervals, start, end))
+        day_start, day_end, rows = fetch_intervals_for_day(conn, day, host=host, device_type=device_type)
     finally:
         conn.close()
 
+    intervals, unique_total_seconds, summed_device_seconds, per_host, per_device_type, per_device, timeline_hosts = clip_segments(rows, day_start, day_end)
 
-@app.get("/api/default_range")
-def api_default_range() -> dict[str, str]:
-    today = datetime.now(timezone.utc).date()
-    start_dt = datetime.combine(today - timedelta(days=6), time.min, tzinfo=timezone.utc)
-    end_dt = datetime.combine(today + timedelta(days=1), time.min, tzinfo=timezone.utc)
-    return {
-        "start": start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "end": end_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    return DaySummaryResponse(
+        day=day,
+        day_start_utc=format_utc(day_start),
+        day_end_utc=format_utc(day_end),
+        host_filter=host,
+        device_type_filter=device_type,
+        interval_count=len(intervals),
+        unique_total_seconds=unique_total_seconds,
+        unique_total_hours=round(unique_total_seconds / 3600, 4),
+        summed_device_seconds=summed_device_seconds,
+        summed_device_hours=round(summed_device_seconds / 3600, 4),
+        per_host=per_host,
+        per_device_type=per_device_type,
+        per_device=per_device,
+        timeline_hosts=timeline_hosts,
+        intervals=intervals,
+    )
+
+
+HTML_PAGE = """
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Screen Time Dashboard</title>
+  <style>
+    :root {
+      --bg: #f6f7fb;
+      --panel: #ffffff;
+      --line: #d8ddea;
+      --text: #182033;
+      --muted: #667085;
+      --accent: #4f46e5;
+      --accent-2: #16a34a;
     }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    .wrap { max-width: 1500px; margin: 0 auto; padding: 20px; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .title { font-size: 20px; font-weight: 700; }
+    .muted { color: var(--muted); }
+    .controls, .grid { display: grid; gap: 16px; }
+    .controls { grid-template-columns: 220px 240px 240px 140px; margin-bottom: 16px; }
+    .card {
+      background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px;
+      box-shadow: 0 1px 2px rgba(16,24,40,.04);
+    }
+    label { display: block; font-size: 13px; margin-bottom: 6px; color: var(--muted); }
+    input, select, button {
+      width: 100%; border: 1px solid var(--line); background: white; border-radius: 10px; min-height: 42px;
+      padding: 10px 12px; font: inherit;
+    }
+    button { background: var(--accent); color: white; border: 0; font-weight: 600; cursor: pointer; }
+    .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
+    .stat-value { font-size: 34px; font-weight: 800; margin: 8px 0 4px; }
+    .two-col { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 16px; }
+    .three-col { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
+    .bottom { display: grid; grid-template-columns: 1.1fr 1.4fr; gap: 16px; }
+    .section-title { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+    .section-sub { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+
+    .bars { display: grid; gap: 10px; }
+    .bar-row { display: grid; grid-template-columns: 180px 1fr 72px; gap: 10px; align-items: center; }
+    .bar-label {
+      font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .bar-track { height: 24px; background: #eef2ff; border-radius: 999px; overflow: hidden; }
+    .bar-fill { height: 100%; background: linear-gradient(90deg, #6366f1, #4f46e5); border-radius: 999px; }
+    .bar-value { font-size: 13px; text-align: right; color: var(--muted); }
+
+    .timeline { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+    .timeline-header, .timeline-row {
+      display: grid; grid-template-columns: 180px 1fr;
+    }
+    .timeline-header { background: #fafbff; border-bottom: 1px solid var(--line); }
+    .timeline-host, .timeline-hours { padding: 10px 12px; }
+    .timeline-hours { position: relative; height: 44px; }
+    .timeline-scale { display: flex; height: 100%; }
+    .tick { flex: 1; position: relative; border-left: 1px solid var(--line); }
+    .tick span { position: absolute; top: 2px; left: 6px; font-size: 12px; color: var(--muted); }
+    .timeline-row { border-bottom: 1px solid var(--line); }
+    .timeline-row:last-child { border-bottom: 0; }
+    .timeline-host { font-size: 14px; font-weight: 600; display: flex; flex-direction: column; justify-content: center; }
+    .timeline-host small { color: var(--muted); font-weight: 500; }
+    .timeline-track {
+      position: relative; min-height: 42px;
+      background-image: repeating-linear-gradient(to right, transparent, transparent calc(12.5% - 1px), #e5e7eb calc(12.5% - 1px), #e5e7eb 12.5%);
+    }
+    .segment {
+      position: absolute; top: 8px; height: 26px; border-radius: 999px;
+      background: linear-gradient(90deg, #22c55e, #16a34a);
+      border: 1px solid rgba(0,0,0,.06);
+    }
+    .segment.android { background: linear-gradient(90deg, #22c55e, #16a34a); }
+    .segment.ubuntu { background: linear-gradient(90deg, #6366f1, #4f46e5); }
+    .segment.windows { background: linear-gradient(90deg, #f59e0b, #ea580c); }
+    .segment.unknown { background: linear-gradient(90deg, #64748b, #475569); }
+
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; background: #fafbff; }
+    .empty { color: var(--muted); font-size: 14px; }
+    .loading { opacity: .7; pointer-events: none; }
+
+    @media (max-width: 1100px) {
+      .controls, .stats, .two-col, .three-col, .bottom { grid-template-columns: 1fr; }
+      .bar-row, .timeline-header, .timeline-row { grid-template-columns: 1fr; }
+      .timeline-hours { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap" id="app">
+    <div class="header">
+      <div class="title">Screen Time Dashboard</div>
+      <div class="muted">UTC day view</div>
+    </div>
+
+    <div class="controls card">
+      <div>
+        <label for="day">Day</label>
+        <input id="day" type="date">
+      </div>
+      <div>
+        <label for="host">Hostname</label>
+        <select id="host"><option value="">All Hosts</option></select>
+      </div>
+      <div>
+        <label for="deviceType">Device Type</label>
+        <select id="deviceType"><option value="">All Types</option></select>
+      </div>
+      <div style="display:flex;align-items:end;">
+        <button id="refresh">Refresh</button>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="card"><div class="muted">Unique Total</div><div class="stat-value" id="uniqueTotal">-</div><div class="muted">No double counting across devices</div></div>
+      <div class="card"><div class="muted">Summed Device Time</div><div class="stat-value" id="summedTotal">-</div><div class="muted">Simple sum of device totals</div></div>
+      <div class="card"><div class="muted">Active Devices</div><div class="stat-value" id="activeDevices">-</div><div class="muted">Distinct hostnames</div></div>
+      <div class="card"><div class="muted">Intervals</div><div class="stat-value" id="intervalCount">-</div><div class="muted">Intervals overlapping the day</div></div>
+    </div>
+
+    <div class="two-col">
+      <div class="card">
+        <div class="section-title">Timeline by Hostname</div>
+        <div class="section-sub">Each row is one hostname. Bars are clipped to the selected UTC day.</div>
+        <div id="timeline"></div>
+      </div>
+      <div class="card">
+        <div class="section-title">By Hostname</div>
+        <div class="section-sub">Total clipped time by hostname</div>
+        <div id="hostBars"></div>
+      </div>
+    </div>
+
+    <div class="three-col">
+      <div class="card">
+        <div class="section-title">By Device Type</div>
+        <div class="section-sub">Total clipped time by device type</div>
+        <div id="typeBars"></div>
+      </div>
+      <div class="card">
+        <div class="section-title">Per Device</div>
+        <div class="section-sub">Each hostname with its device type</div>
+        <div id="deviceBars"></div>
+      </div>
+      <div class="card">
+        <div class="section-title">Selection</div>
+        <div class="section-sub">Selected day and filters</div>
+        <div id="selectionSummary" class="empty"></div>
+      </div>
+    </div>
+
+    <div class="bottom">
+      <div class="card">
+        <div class="section-title">Per-Device Details</div>
+        <div class="section-sub">Grouped by hostname</div>
+        <div id="deviceTable"></div>
+      </div>
+      <div class="card">
+        <div class="section-title">Intervals</div>
+        <div class="section-sub">All intervals clipped to the selected day</div>
+        <div id="intervalTable"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const app = document.getElementById('app');
+    const dayInput = document.getElementById('day');
+    const hostSelect = document.getElementById('host');
+    const deviceTypeSelect = document.getElementById('deviceType');
+    const refreshBtn = document.getElementById('refresh');
+
+    function fmtDuration(seconds) {
+      const s = Math.max(0, Math.round(seconds));
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const sec = s % 60;
+      if (h > 0) return `${h}h ${m}m`;
+      if (m > 0) return `${m}m ${sec}s`;
+      return `${sec}s`;
+    }
+
+    function fmtShort(ts) {
+      return ts.slice(11, 19);
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function renderBars(el, rows, labelFn) {
+      if (!rows.length) {
+        el.innerHTML = '<div class="empty">No data</div>';
+        return;
+      }
+      const max = Math.max(...rows.map(r => r.seconds), 1);
+      el.innerHTML = `<div class="bars">${rows.map(r => `
+        <div class="bar-row">
+          <div class="bar-label" title="${escapeHtml(labelFn(r))}">${escapeHtml(labelFn(r))}</div>
+          <div class="bar-track"><div class="bar-fill" style="width:${(r.seconds / max) * 100}%"></div></div>
+          <div class="bar-value">${fmtDuration(r.seconds)}</div>
+        </div>
+      `).join('')}</div>`;
+    }
+
+    function renderTimeline(data) {
+      if (!data.per_device.length) {
+        document.getElementById('timeline').innerHTML = '<div class="empty">No data</div>';
+        return;
+      }
+      const byHost = new Map(data.per_device.map(d => [d.host, d]));
+      const rows = data.timeline_hosts.map(host => {
+        const meta = byHost.get(host);
+        const segments = data.intervals.filter(i => i.host === host).map(i => {
+          const start = Date.parse(i.clipped_start_time);
+          const end = Date.parse(i.clipped_end_time);
+          const dayStart = Date.parse(data.day_start_utc);
+          const dayEnd = Date.parse(data.day_end_utc);
+          const left = ((start - dayStart) / (dayEnd - dayStart)) * 100;
+          const width = ((end - start) / (dayEnd - dayStart)) * 100;
+          const cls = ['android', 'ubuntu', 'windows'].includes(i.device_type) ? i.device_type : 'unknown';
+          return `<div class="segment ${cls}" style="left:${left}%;width:${Math.max(width, 0.35)}%" title="${escapeHtml(host)} · ${escapeHtml(i.device_type)} · ${fmtShort(i.clipped_start_time)} → ${fmtShort(i.clipped_end_time)}"></div>`;
+        }).join('');
+        return `
+          <div class="timeline-row">
+            <div class="timeline-host">${escapeHtml(host)}<small>${escapeHtml(meta ? meta.device_type : '')}</small></div>
+            <div class="timeline-track">${segments}</div>
+          </div>`;
+      }).join('');
+
+      document.getElementById('timeline').innerHTML = `
+        <div class="timeline">
+          <div class="timeline-header">
+            <div class="timeline-host muted">Hostname</div>
+            <div class="timeline-hours">
+              <div class="timeline-scale">
+                ${['00:00','03:00','06:00','09:00','12:00','15:00','18:00','21:00'].map(t => `<div class="tick"><span>${t}</span></div>`).join('')}
+              </div>
+            </div>
+          </div>
+          ${rows}
+        </div>`;
+    }
+
+    function renderDeviceTable(rows) {
+      if (!rows.length) return '<div class="empty">No data</div>';
+      return `<table>
+        <thead><tr><th>Hostname</th><th>Type</th><th>Total</th><th>Intervals</th><th>First Active</th><th>Last Active</th></tr></thead>
+        <tbody>${rows.map(r => `
+          <tr>
+            <td>${escapeHtml(r.host)}</td>
+            <td>${escapeHtml(r.device_type)}</td>
+            <td>${fmtDuration(r.seconds)}</td>
+            <td>${r.interval_count}</td>
+            <td>${r.first_active_utc ? fmtShort(r.first_active_utc) : ''}</td>
+            <td>${r.last_active_utc ? fmtShort(r.last_active_utc) : ''}</td>
+          </tr>`).join('')}</tbody>
+      </table>`;
+    }
+
+    function renderIntervalTable(rows) {
+      if (!rows.length) return '<div class="empty">No data</div>';
+      return `<table>
+        <thead><tr><th>Start</th><th>End</th><th>Hostname</th><th>Type</th><th>Duration</th></tr></thead>
+        <tbody>${rows.map(r => `
+          <tr>
+            <td>${escapeHtml(r.clipped_start_time.replace('T',' ').replace('Z',''))}</td>
+            <td>${escapeHtml(r.clipped_end_time.replace('T',' ').replace('Z',''))}</td>
+            <td>${escapeHtml(r.host)}</td>
+            <td>${escapeHtml(r.device_type)}</td>
+            <td>${fmtDuration(r.duration_seconds)}</td>
+          </tr>`).join('')}</tbody>
+      </table>`;
+    }
+
+    async function loadSummary() {
+      app.classList.add('loading');
+      const params = new URLSearchParams({ day: dayInput.value });
+      if (hostSelect.value) params.set('host', hostSelect.value);
+      if (deviceTypeSelect.value) params.set('device_type', deviceTypeSelect.value);
+      const res = await fetch(`/api/day?${params.toString()}`);
+      const data = await res.json();
+
+      document.getElementById('uniqueTotal').textContent = fmtDuration(data.unique_total_seconds);
+      document.getElementById('summedTotal').textContent = fmtDuration(data.summed_device_seconds);
+      document.getElementById('activeDevices').textContent = String(data.per_device.length);
+      document.getElementById('intervalCount').textContent = String(data.interval_count);
+      document.getElementById('selectionSummary').innerHTML = `
+        <div><strong>Day:</strong> ${escapeHtml(data.day)}</div>
+        <div><strong>Host filter:</strong> ${escapeHtml(data.host_filter || 'All Hosts')}</div>
+        <div><strong>Type filter:</strong> ${escapeHtml(data.device_type_filter || 'All Types')}</div>
+        <div><strong>UTC window:</strong> ${escapeHtml(data.day_start_utc)} → ${escapeHtml(data.day_end_utc)}</div>`;
+
+      renderTimeline(data);
+      renderBars(document.getElementById('hostBars'), data.per_host, r => r.key);
+      renderBars(document.getElementById('typeBars'), data.per_device_type, r => r.key);
+      renderBars(document.getElementById('deviceBars'), data.per_device, r => `${r.host} (${r.device_type})`);
+      document.getElementById('deviceTable').innerHTML = renderDeviceTable(data.per_device);
+      document.getElementById('intervalTable').innerHTML = renderIntervalTable(data.intervals);
+      app.classList.remove('loading');
+    }
+
+    async function init() {
+      const today = new Date().toISOString().slice(0, 10);
+      dayInput.value = today;
+      const res = await fetch(`/api/day?day=${today}`);
+      const data = await res.json();
+
+      const hostOptions = ['<option value="">All Hosts</option>'].concat(
+        data.per_host.map(r => `<option value="${escapeHtml(r.key)}">${escapeHtml(r.key)}</option>`)
+      );
+      hostSelect.innerHTML = hostOptions.join('');
+
+      const typeOptions = ['<option value="">All Types</option>'].concat(
+        data.per_device_type.map(r => `<option value="${escapeHtml(r.key)}">${escapeHtml(r.key)}</option>`)
+      );
+      deviceTypeSelect.innerHTML = typeOptions.join('');
+
+      await loadSummary();
+    }
+
+    refreshBtn.addEventListener('click', loadSummary);
+    dayInput.addEventListener('change', loadSummary);
+    hostSelect.addEventListener('change', loadSummary);
+    deviceTypeSelect.addEventListener('change', loadSummary);
+    init();
+  </script>
+</body>
+</html>
+"""
+
+
+@app.get("/", response_class=HTMLResponse)
+def dashboard() -> HTMLResponse:
+    return HTMLResponse(HTML_PAGE)
 
 
 def run():
