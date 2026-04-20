@@ -4,6 +4,7 @@ import os
 import sqlite3
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 DEFAULT_DB_PATH = os.environ.get(
     "SCREENTIME_SERVER_DB_PATH",
@@ -25,11 +26,14 @@ def format_utc(dt: datetime) -> str:
     return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def get_day_bounds(day_str: str) -> tuple[datetime, datetime]:
+def get_day_bounds(day_str: str, timezone_name: str = "UTC") -> tuple[datetime, datetime]:
     day = date.fromisoformat(day_str)
-    start = datetime.combine(day, time.min, tzinfo=UTC)
-    end = start + timedelta(days=1)
-    return start, end
+    tz = ZoneInfo(timezone_name)
+    local_start = datetime.combine(day, time.min, tzinfo=tz)
+    local_end = local_start + timedelta(days=1)
+    start_utc = local_start.astimezone(UTC)
+    end_utc = local_end.astimezone(UTC)
+    return start_utc, end_utc
 
 
 def get_conn(db_path: str | None = None) -> sqlite3.Connection:
@@ -148,8 +152,9 @@ def fetch_intervals_for_day(
     day_str: str,
     host: str | None = None,
     device_type: str | None = None,
+    timezone_name: str = "UTC",
 ) -> tuple[datetime, datetime, list[sqlite3.Row]]:
-    day_start, day_end = get_day_bounds(day_str)
+    day_start, day_end = get_day_bounds(day_str, timezone_name=timezone_name)
     clauses = ["start_time < ?", "end_time > ?"]
     params: list[str] = [format_utc(day_end), format_utc(day_start)]
 

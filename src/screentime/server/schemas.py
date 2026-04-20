@@ -61,6 +61,7 @@ class DeviceSummary(BaseModel):
 
 class DaySummaryResponse(BaseModel):
     day: str
+    timezone: str = "UTC"
     day_start_utc: str
     day_end_utc: str
     host_filter: str | None = None

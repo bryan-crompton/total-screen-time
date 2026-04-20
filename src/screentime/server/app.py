@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import html
 import os
 from collections import defaultdict
 from datetime import datetime
@@ -10,11 +9,11 @@ from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 
 from screentime.server.db import (
+    fetch_intervals_for_day,
     format_utc,
     get_conn,
     init_db,
     parse_utc,
-    fetch_intervals_for_day,
 )
 from screentime.server.schemas import (
     BatchUpsertRequest,
@@ -43,6 +42,7 @@ def batch_upsert(req: BatchUpsertRequest) -> BatchUpsertResponse:
         results = []
         for interval in req.intervals:
             from screentime.server.db import upsert_interval
+
             status = upsert_interval(conn, req.hostname, req.device_type, interval)
             results.append(IntervalResult(interval_id=interval.interval_id, status=status))
         return BatchUpsertResponse(results=results)
@@ -142,25 +142,43 @@ def clip_segments(rows, day_start, day_end):
     ]
 
     intervals.sort(key=lambda interval: (interval.clipped_start_time, interval.clipped_end_time, interval.host))
-    return intervals, unique_total_seconds, summed_device_seconds, per_host, per_device_type, per_device, sorted(timeline_hosts)
+    return (
+        intervals,
+        unique_total_seconds,
+        summed_device_seconds,
+        per_host,
+        per_device_type,
+        per_device,
+        sorted(timeline_hosts),
+    )
 
 
 @app.get("/api/day", response_model=DaySummaryResponse)
 def day_summary(
-    day: str = Query(..., description="UTC day in YYYY-MM-DD format"),
+    day: str = Query(..., description="Local day in YYYY-MM-DD format"),
     host: str | None = Query(None),
     device_type: str | None = Query(None),
+    timezone: str = Query("UTC", description="IANA timezone, e.g. America/New_York"),
 ) -> DaySummaryResponse:
     conn = get_conn()
     try:
-        day_start, day_end, rows = fetch_intervals_for_day(conn, day, host=host, device_type=device_type)
+        day_start, day_end, rows = fetch_intervals_for_day(
+            conn,
+            day,
+            host=host,
+            device_type=device_type,
+            timezone_name=timezone,
+        )
     finally:
         conn.close()
 
-    intervals, unique_total_seconds, summed_device_seconds, per_host, per_device_type, per_device, timeline_hosts = clip_segments(rows, day_start, day_end)
+    intervals, unique_total_seconds, summed_device_seconds, per_host, per_device_type, per_device, timeline_hosts = clip_segments(
+        rows, day_start, day_end
+    )
 
     return DaySummaryResponse(
         day=day,
+        timezone=timezone,
         day_start_utc=format_utc(day_start),
         day_end_utc=format_utc(day_end),
         host_filter=host,
@@ -193,16 +211,14 @@ HTML_PAGE = """
       --text: #182033;
       --muted: #667085;
       --accent: #4f46e5;
-      --accent-2: #16a34a;
     }
     * { box-sizing: border-box; }
     body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); }
     .wrap { max-width: 1500px; margin: 0 auto; padding: 20px; }
-    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 16px; }
     .title { font-size: 20px; font-weight: 700; }
     .muted { color: var(--muted); }
-    .controls, .grid { display: grid; gap: 16px; }
-    .controls { grid-template-columns: 220px 240px 240px 140px; margin-bottom: 16px; }
+    .controls { display: grid; grid-template-columns: 220px 240px 240px 140px; gap: 16px; margin-bottom: 16px; }
     .card {
       background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px;
       box-shadow: 0 1px 2px rgba(16,24,40,.04);
@@ -223,17 +239,13 @@ HTML_PAGE = """
 
     .bars { display: grid; gap: 10px; }
     .bar-row { display: grid; grid-template-columns: 180px 1fr 72px; gap: 10px; align-items: center; }
-    .bar-label {
-      font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
+    .bar-label { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .bar-track { height: 24px; background: #eef2ff; border-radius: 999px; overflow: hidden; }
     .bar-fill { height: 100%; background: linear-gradient(90deg, #6366f1, #4f46e5); border-radius: 999px; }
     .bar-value { font-size: 13px; text-align: right; color: var(--muted); }
 
     .timeline { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-    .timeline-header, .timeline-row {
-      display: grid; grid-template-columns: 180px 1fr;
-    }
+    .timeline-header, .timeline-row { display: grid; grid-template-columns: 180px 1fr; }
     .timeline-header { background: #fafbff; border-bottom: 1px solid var(--line); }
     .timeline-host, .timeline-hours { padding: 10px 12px; }
     .timeline-hours { position: relative; height: 44px; }
@@ -250,24 +262,19 @@ HTML_PAGE = """
     }
     .segment {
       position: absolute; top: 8px; height: 26px; border-radius: 999px;
-      background: linear-gradient(90deg, #22c55e, #16a34a);
-      border: 1px solid rgba(0,0,0,.06);
+      background: linear-gradient(90deg, #34d399, #10b981);
+      box-shadow: 0 1px 2px rgba(16,24,40,.16);
     }
-    .segment.android { background: linear-gradient(90deg, #22c55e, #16a34a); }
-    .segment.ubuntu { background: linear-gradient(90deg, #6366f1, #4f46e5); }
-    .segment.windows { background: linear-gradient(90deg, #f59e0b, #ea580c); }
-    .segment.unknown { background: linear-gradient(90deg, #64748b, #475569); }
 
     table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-    th { color: var(--muted); font-weight: 600; background: #fafbff; }
-    .empty { color: var(--muted); font-size: 14px; }
-    .loading { opacity: .7; pointer-events: none; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    tr:last-child td { border-bottom: 0; }
+    .empty { color: var(--muted); padding: 20px 4px; }
+    .loading { opacity: 0.65; pointer-events: none; }
 
     @media (max-width: 1100px) {
       .controls, .stats, .two-col, .three-col, .bottom { grid-template-columns: 1fr; }
-      .bar-row, .timeline-header, .timeline-row { grid-template-columns: 1fr; }
-      .timeline-hours { display: none; }
     }
   </style>
 </head>
@@ -275,23 +282,24 @@ HTML_PAGE = """
   <div class="wrap" id="app">
     <div class="header">
       <div class="title">Screen Time Dashboard</div>
-      <div class="muted">UTC day view</div>
+      <div class="muted" id="timezoneLabel">Loading timezone…</div>
     </div>
 
-    <div class="controls card">
-      <div>
+    <div class="controls">
+      <div class="card">
         <label for="day">Day</label>
         <input id="day" type="date">
       </div>
-      <div>
+      <div class="card">
         <label for="host">Hostname</label>
         <select id="host"><option value="">All Hosts</option></select>
       </div>
-      <div>
+      <div class="card">
         <label for="deviceType">Device Type</label>
         <select id="deviceType"><option value="">All Types</option></select>
       </div>
-      <div style="display:flex;align-items:end;">
+      <div class="card">
+        <label>&nbsp;</label>
         <button id="refresh">Refresh</button>
       </div>
     </div>
@@ -300,13 +308,13 @@ HTML_PAGE = """
       <div class="card"><div class="muted">Unique Total</div><div class="stat-value" id="uniqueTotal">-</div><div class="muted">No double counting across devices</div></div>
       <div class="card"><div class="muted">Summed Device Time</div><div class="stat-value" id="summedTotal">-</div><div class="muted">Simple sum of device totals</div></div>
       <div class="card"><div class="muted">Active Devices</div><div class="stat-value" id="activeDevices">-</div><div class="muted">Distinct hostnames</div></div>
-      <div class="card"><div class="muted">Intervals</div><div class="stat-value" id="intervalCount">-</div><div class="muted">Intervals overlapping the day</div></div>
+      <div class="card"><div class="muted">Intervals</div><div class="stat-value" id="intervalCount">-</div><div class="muted">Intervals overlapping the selected local day</div></div>
     </div>
 
     <div class="two-col">
       <div class="card">
         <div class="section-title">Timeline by Hostname</div>
-        <div class="section-sub">Each row is one hostname. Bars are clipped to the selected UTC day.</div>
+        <div class="section-sub">Each row is one hostname. Bars are clipped to the selected day in your local timezone.</div>
         <div id="timeline"></div>
       </div>
       <div class="card">
@@ -342,7 +350,7 @@ HTML_PAGE = """
       </div>
       <div class="card">
         <div class="section-title">Intervals</div>
-        <div class="section-sub">All intervals clipped to the selected day</div>
+        <div class="section-sub">All intervals clipped to the selected local day</div>
         <div id="intervalTable"></div>
       </div>
     </div>
@@ -354,6 +362,15 @@ HTML_PAGE = """
     const hostSelect = document.getElementById('host');
     const deviceTypeSelect = document.getElementById('deviceType');
     const refreshBtn = document.getElementById('refresh');
+    const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    document.getElementById('timezoneLabel').textContent = `Local day view: ${browserTimeZone}`;
+
+    function localDateString(d = new Date()) {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
 
     function fmtDuration(seconds) {
       const s = Math.max(0, Math.round(seconds));
@@ -365,13 +382,32 @@ HTML_PAGE = """
       return `${sec}s`;
     }
 
-    function fmtShort(ts) {
-      return ts.slice(11, 19);
+    function fmtLocalTime(ts) {
+      return new Intl.DateTimeFormat([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        timeZone: browserTimeZone,
+      }).format(new Date(ts));
+    }
+
+    function fmtLocalDateTime(ts) {
+      return new Intl.DateTimeFormat([], {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        timeZone: browserTimeZone,
+      }).format(new Date(ts));
     }
 
     function escapeHtml(text) {
       const div = document.createElement('div');
-      div.textContent = text;
+      div.textContent = text == null ? '' : String(text);
       return div.innerHTML;
     }
 
@@ -395,19 +431,23 @@ HTML_PAGE = """
         document.getElementById('timeline').innerHTML = '<div class="empty">No data</div>';
         return;
       }
+
       const byHost = new Map(data.per_device.map(d => [d.host, d]));
+      const dayStart = Date.parse(data.day_start_utc);
+      const dayEnd = Date.parse(data.day_end_utc);
       const rows = data.timeline_hosts.map(host => {
         const meta = byHost.get(host);
-        const segments = data.intervals.filter(i => i.host === host).map(i => {
-          const start = Date.parse(i.clipped_start_time);
-          const end = Date.parse(i.clipped_end_time);
-          const dayStart = Date.parse(data.day_start_utc);
-          const dayEnd = Date.parse(data.day_end_utc);
-          const left = ((start - dayStart) / (dayEnd - dayStart)) * 100;
-          const width = ((end - start) / (dayEnd - dayStart)) * 100;
-          const cls = ['android', 'ubuntu', 'windows'].includes(i.device_type) ? i.device_type : 'unknown';
-          return `<div class="segment ${cls}" style="left:${left}%;width:${Math.max(width, 0.35)}%" title="${escapeHtml(host)} · ${escapeHtml(i.device_type)} · ${fmtShort(i.clipped_start_time)} → ${fmtShort(i.clipped_end_time)}"></div>`;
-        }).join('');
+        const segments = data.intervals
+          .filter(i => i.host === host)
+          .map(i => {
+            const start = Date.parse(i.clipped_start_time);
+            const end = Date.parse(i.clipped_end_time);
+            const left = ((start - dayStart) / (dayEnd - dayStart)) * 100;
+            const width = ((end - start) / (dayEnd - dayStart)) * 100;
+            return `<div class="segment" style="left:${left}%;width:${Math.max(width, 0.35)}%" title="${escapeHtml(host)} · ${escapeHtml(i.device_type)} · ${fmtLocalTime(i.clipped_start_time)} → ${fmtLocalTime(i.clipped_end_time)}"></div>`;
+          })
+          .join('');
+
         return `
           <div class="timeline-row">
             <div class="timeline-host">${escapeHtml(host)}<small>${escapeHtml(meta ? meta.device_type : '')}</small></div>
@@ -439,8 +479,8 @@ HTML_PAGE = """
             <td>${escapeHtml(r.device_type)}</td>
             <td>${fmtDuration(r.seconds)}</td>
             <td>${r.interval_count}</td>
-            <td>${r.first_active_utc ? fmtShort(r.first_active_utc) : ''}</td>
-            <td>${r.last_active_utc ? fmtShort(r.last_active_utc) : ''}</td>
+            <td>${r.first_active_utc ? fmtLocalTime(r.first_active_utc) : ''}</td>
+            <td>${r.last_active_utc ? fmtLocalTime(r.last_active_utc) : ''}</td>
           </tr>`).join('')}</tbody>
       </table>`;
     }
@@ -451,8 +491,8 @@ HTML_PAGE = """
         <thead><tr><th>Start</th><th>End</th><th>Hostname</th><th>Type</th><th>Duration</th></tr></thead>
         <tbody>${rows.map(r => `
           <tr>
-            <td>${escapeHtml(r.clipped_start_time.replace('T',' ').replace('Z',''))}</td>
-            <td>${escapeHtml(r.clipped_end_time.replace('T',' ').replace('Z',''))}</td>
+            <td>${escapeHtml(fmtLocalDateTime(r.clipped_start_time))}</td>
+            <td>${escapeHtml(fmtLocalDateTime(r.clipped_end_time))}</td>
             <td>${escapeHtml(r.host)}</td>
             <td>${escapeHtml(r.device_type)}</td>
             <td>${fmtDuration(r.duration_seconds)}</td>
@@ -460,9 +500,18 @@ HTML_PAGE = """
       </table>`;
     }
 
+    async function fetchDay(day) {
+      const params = new URLSearchParams({ day, timezone: browserTimeZone });
+      const res = await fetch(`/api/day?${params.toString()}`);
+      return await res.json();
+    }
+
     async function loadSummary() {
       app.classList.add('loading');
-      const params = new URLSearchParams({ day: dayInput.value });
+      const params = new URLSearchParams({
+        day: dayInput.value,
+        timezone: browserTimeZone,
+      });
       if (hostSelect.value) params.set('host', hostSelect.value);
       if (deviceTypeSelect.value) params.set('device_type', deviceTypeSelect.value);
       const res = await fetch(`/api/day?${params.toString()}`);
@@ -474,6 +523,7 @@ HTML_PAGE = """
       document.getElementById('intervalCount').textContent = String(data.interval_count);
       document.getElementById('selectionSummary').innerHTML = `
         <div><strong>Day:</strong> ${escapeHtml(data.day)}</div>
+        <div><strong>Timezone:</strong> ${escapeHtml(data.timezone)}</div>
         <div><strong>Host filter:</strong> ${escapeHtml(data.host_filter || 'All Hosts')}</div>
         <div><strong>Type filter:</strong> ${escapeHtml(data.device_type_filter || 'All Types')}</div>
         <div><strong>UTC window:</strong> ${escapeHtml(data.day_start_utc)} → ${escapeHtml(data.day_end_utc)}</div>`;
@@ -488,20 +538,17 @@ HTML_PAGE = """
     }
 
     async function init() {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = localDateString();
       dayInput.value = today;
-      const res = await fetch(`/api/day?day=${today}`);
-      const data = await res.json();
+      const data = await fetchDay(today);
 
-      const hostOptions = ['<option value="">All Hosts</option>'].concat(
-        data.per_host.map(r => `<option value="${escapeHtml(r.key)}">${escapeHtml(r.key)}</option>`)
-      );
-      hostSelect.innerHTML = hostOptions.join('');
+      hostSelect.innerHTML = ['<option value="">All Hosts</option>']
+        .concat(data.per_host.map(r => `<option value="${escapeHtml(r.key)}">${escapeHtml(r.key)}</option>`))
+        .join('');
 
-      const typeOptions = ['<option value="">All Types</option>'].concat(
-        data.per_device_type.map(r => `<option value="${escapeHtml(r.key)}">${escapeHtml(r.key)}</option>`)
-      );
-      deviceTypeSelect.innerHTML = typeOptions.join('');
+      deviceTypeSelect.innerHTML = ['<option value="">All Types</option>']
+        .concat(data.per_device_type.map(r => `<option value="${escapeHtml(r.key)}">${escapeHtml(r.key)}</option>`))
+        .join('');
 
       await loadSummary();
     }
