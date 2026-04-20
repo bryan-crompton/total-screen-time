@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Screen Time</string>
+    <string name="notification_channel_name">Screen Time Tracking</string>
+    <string name="notification_channel_description">Keeps screen-time tracking active.</string>
+    <string name="tracking_notification_title">Screen Time tracking active</string>
+    <string name="tracking_notification_text">Monitoring screen on/unlocked sessions.</string>
+</resources>
