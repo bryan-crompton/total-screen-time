@@ -211,6 +211,7 @@ HTML_PAGE = """
       --text: #182033;
       --muted: #667085;
       --accent: #4f46e5;
+      --timeline-bg: #f8faff;
     }
     * { box-sizing: border-box; }
     body { margin: 0; font-family: Inter, system-ui, sans-serif; background: var(--bg); color: var(--text); }
@@ -218,7 +219,7 @@ HTML_PAGE = """
     .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 16px; }
     .title { font-size: 20px; font-weight: 700; }
     .muted { color: var(--muted); }
-    .controls { display: grid; grid-template-columns: 220px 240px 240px 140px; gap: 16px; margin-bottom: 16px; }
+    .controls { display: grid; grid-template-columns: minmax(320px, 420px) 240px 240px 140px; gap: 16px; margin-bottom: 16px; }
     .card {
       background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px;
       box-shadow: 0 1px 2px rgba(16,24,40,.04);
@@ -229,6 +230,11 @@ HTML_PAGE = """
       padding: 10px 12px; font: inherit;
     }
     button { background: var(--accent); color: white; border: 0; font-weight: 600; cursor: pointer; }
+    .day-nav { display: grid; grid-template-columns: 46px 1fr 46px; gap: 10px; align-items: center; }
+    .nav-btn {
+      min-height: 42px; padding: 0; font-size: 22px; line-height: 1; display: flex; align-items: center; justify-content: center;
+    }
+    .nav-btn:disabled { opacity: 0.5; cursor: default; }
     .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
     .stat-value { font-size: 34px; font-weight: 800; margin: 8px 0 4px; }
     .two-col { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 16px; }
@@ -241,8 +247,12 @@ HTML_PAGE = """
     .bar-row { display: grid; grid-template-columns: 180px 1fr 72px; gap: 10px; align-items: center; }
     .bar-label { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .bar-track { height: 24px; background: #eef2ff; border-radius: 999px; overflow: hidden; }
-    .bar-fill { height: 100%; background: linear-gradient(90deg, #6366f1, #4f46e5); border-radius: 999px; }
+    .bar-fill { height: 100%; border-radius: 999px; }
     .bar-value { font-size: 13px; text-align: right; color: var(--muted); }
+    .bar-dot {
+      display: inline-block; width: 10px; height: 10px; border-radius: 999px; margin-right: 8px; vertical-align: middle;
+      border: 1px solid rgba(24,32,51,.12);
+    }
 
     .timeline { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
     .timeline-header, .timeline-row { display: grid; grid-template-columns: 180px 1fr; }
@@ -254,16 +264,20 @@ HTML_PAGE = """
     .tick span { position: absolute; top: 2px; left: 6px; font-size: 12px; color: var(--muted); }
     .timeline-row { border-bottom: 1px solid var(--line); }
     .timeline-row:last-child { border-bottom: 0; }
-    .timeline-host { font-size: 14px; font-weight: 600; display: flex; flex-direction: column; justify-content: center; }
+    .timeline-host { font-size: 14px; font-weight: 600; display: flex; flex-direction: column; justify-content: center; gap: 3px; }
     .timeline-host small { color: var(--muted); font-weight: 500; }
     .timeline-track {
-      position: relative; min-height: 42px;
-      background-image: repeating-linear-gradient(to right, transparent, transparent calc(12.5% - 1px), #e5e7eb calc(12.5% - 1px), #e5e7eb 12.5%);
+      position: relative; height: 42px; margin: 7px 12px; border-radius: 8px; background: var(--timeline-bg); overflow: hidden;
+      background-image: linear-gradient(to right, transparent 0%, transparent calc(12.5% - 1px), var(--line) calc(12.5% - 1px), var(--line) 12.5%, transparent 12.5%);
+      background-size: 12.5% 100%;
     }
     .segment {
-      position: absolute; top: 8px; height: 26px; border-radius: 999px;
-      background: linear-gradient(90deg, #34d399, #10b981);
-      box-shadow: 0 1px 2px rgba(16,24,40,.16);
+      position: absolute; top: 8px; height: 26px; border-radius: 6px; border: 1px solid rgba(24,32,51,.10);
+      box-shadow: inset 0 -1px 0 rgba(255,255,255,.18);
+    }
+    .host-chip { display: inline-flex; align-items: center; gap: 8px; }
+    .host-swatch {
+      width: 10px; height: 10px; border-radius: 999px; border: 1px solid rgba(24,32,51,.12); flex: 0 0 auto;
     }
 
     table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -288,7 +302,11 @@ HTML_PAGE = """
     <div class="controls">
       <div class="card">
         <label for="day">Day</label>
-        <input id="day" type="date">
+        <div class="day-nav">
+          <button id="prevDay" class="nav-btn" type="button" aria-label="Previous day">&#8249;</button>
+          <input id="day" type="date">
+          <button id="nextDay" class="nav-btn" type="button" aria-label="Next day">&#8250;</button>
+        </div>
       </div>
       <div class="card">
         <label for="host">Hostname</label>
@@ -300,7 +318,7 @@ HTML_PAGE = """
       </div>
       <div class="card">
         <label>&nbsp;</label>
-        <button id="refresh">Refresh</button>
+        <button id="refresh" type="button">Refresh</button>
       </div>
     </div>
 
@@ -314,7 +332,7 @@ HTML_PAGE = """
     <div class="two-col">
       <div class="card">
         <div class="section-title">Timeline by Hostname</div>
-        <div class="section-sub">Each row is one hostname. Bars are clipped to the selected day in your local timezone.</div>
+        <div class="section-sub">Each row is one hostname. Colors stay consistent per hostname.</div>
         <div id="timeline"></div>
       </div>
       <div class="card">
@@ -362,14 +380,36 @@ HTML_PAGE = """
     const hostSelect = document.getElementById('host');
     const deviceTypeSelect = document.getElementById('deviceType');
     const refreshBtn = document.getElementById('refresh');
+    const prevDayBtn = document.getElementById('prevDay');
+    const nextDayBtn = document.getElementById('nextDay');
     const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     document.getElementById('timezoneLabel').textContent = `Local day view: ${browserTimeZone}`;
+
+    const HOST_PALETTE = [
+      ['hsl(221 83% 55%)', 'linear-gradient(90deg, hsl(221 83% 60%), hsl(221 83% 52%))'],
+      ['hsl(145 63% 42%)', 'linear-gradient(90deg, hsl(145 58% 48%), hsl(145 63% 40%))'],
+      ['hsl(28 92% 50%)', 'linear-gradient(90deg, hsl(33 96% 56%), hsl(24 90% 48%))'],
+      ['hsl(281 75% 58%)', 'linear-gradient(90deg, hsl(286 80% 64%), hsl(276 70% 54%))'],
+      ['hsl(354 78% 57%)', 'linear-gradient(90deg, hsl(354 82% 63%), hsl(349 74% 53%))'],
+      ['hsl(191 78% 42%)', 'linear-gradient(90deg, hsl(191 78% 48%), hsl(192 76% 38%))'],
+      ['hsl(48 94% 46%)', 'linear-gradient(90deg, hsl(48 98% 54%), hsl(44 90% 44%))'],
+      ['hsl(168 76% 36%)', 'linear-gradient(90deg, hsl(168 74% 42%), hsl(169 78% 32%))'],
+      ['hsl(230 65% 60%)', 'linear-gradient(90deg, hsl(230 70% 66%), hsl(230 62% 56%))'],
+      ['hsl(12 82% 57%)', 'linear-gradient(90deg, hsl(12 86% 63%), hsl(10 78% 53%))'],
+    ];
 
     function localDateString(d = new Date()) {
       const year = d.getFullYear();
       const month = String(d.getMonth() + 1).padStart(2, '0');
       const day = String(d.getDate()).padStart(2, '0');
       return `${year}-${month}-${day}`;
+    }
+
+    function shiftDay(dayString, offsetDays) {
+      const [year, month, day] = dayString.split('-').map(Number);
+      const d = new Date(year, month - 1, day);
+      d.setDate(d.getDate() + offsetDays);
+      return localDateString(d);
     }
 
     function fmtDuration(seconds) {
@@ -411,19 +451,39 @@ HTML_PAGE = """
       return div.innerHTML;
     }
 
-    function renderBars(el, rows, labelFn) {
+    function hashString(text) {
+      let hash = 0;
+      for (let i = 0; i < text.length; i += 1) {
+        hash = ((hash << 5) - hash) + text.charCodeAt(i);
+        hash |= 0;
+      }
+      return Math.abs(hash);
+    }
+
+    function getHostColorPair(host) {
+      return HOST_PALETTE[hashString(host) % HOST_PALETTE.length];
+    }
+
+    function hostDot(host) {
+      const [solid] = getHostColorPair(host);
+      return `<span class="host-swatch" style="background:${solid}"></span>`;
+    }
+
+    function renderBars(el, rows, labelFn, colorFn = null) {
       if (!rows.length) {
         el.innerHTML = '<div class="empty">No data</div>';
         return;
       }
       const max = Math.max(...rows.map(r => r.seconds), 1);
-      el.innerHTML = `<div class="bars">${rows.map(r => `
+      el.innerHTML = `<div class="bars">${rows.map(r => {
+        const fill = colorFn ? colorFn(r) : 'linear-gradient(90deg, #6366f1, #4f46e5)';
+        return `
         <div class="bar-row">
           <div class="bar-label" title="${escapeHtml(labelFn(r))}">${escapeHtml(labelFn(r))}</div>
-          <div class="bar-track"><div class="bar-fill" style="width:${(r.seconds / max) * 100}%"></div></div>
+          <div class="bar-track"><div class="bar-fill" style="width:${(r.seconds / max) * 100}%;background:${fill}"></div></div>
           <div class="bar-value">${fmtDuration(r.seconds)}</div>
-        </div>
-      `).join('')}</div>`;
+        </div>`;
+      }).join('')}</div>`;
     }
 
     function renderTimeline(data) {
@@ -437,6 +497,7 @@ HTML_PAGE = """
       const dayEnd = Date.parse(data.day_end_utc);
       const rows = data.timeline_hosts.map(host => {
         const meta = byHost.get(host);
+        const [solid, gradient] = getHostColorPair(host);
         const segments = data.intervals
           .filter(i => i.host === host)
           .map(i => {
@@ -444,13 +505,13 @@ HTML_PAGE = """
             const end = Date.parse(i.clipped_end_time);
             const left = ((start - dayStart) / (dayEnd - dayStart)) * 100;
             const width = ((end - start) / (dayEnd - dayStart)) * 100;
-            return `<div class="segment" style="left:${left}%;width:${Math.max(width, 0.35)}%" title="${escapeHtml(host)} · ${escapeHtml(i.device_type)} · ${fmtLocalTime(i.clipped_start_time)} → ${fmtLocalTime(i.clipped_end_time)}"></div>`;
+            return `<div class="segment" style="left:${left}%;width:${Math.max(width, 0.35)}%;background:${gradient};border-color:${solid}33" title="${escapeHtml(host)} · ${escapeHtml(i.device_type)} · ${fmtLocalTime(i.clipped_start_time)} → ${fmtLocalTime(i.clipped_end_time)}"></div>`;
           })
           .join('');
 
         return `
           <div class="timeline-row">
-            <div class="timeline-host">${escapeHtml(host)}<small>${escapeHtml(meta ? meta.device_type : '')}</small></div>
+            <div class="timeline-host"><span class="host-chip">${hostDot(host)}<span>${escapeHtml(host)}</span></span><small>${escapeHtml(meta ? meta.device_type : '')}</small></div>
             <div class="timeline-track">${segments}</div>
           </div>`;
       }).join('');
@@ -475,7 +536,7 @@ HTML_PAGE = """
         <thead><tr><th>Hostname</th><th>Type</th><th>Total</th><th>Intervals</th><th>First Active</th><th>Last Active</th></tr></thead>
         <tbody>${rows.map(r => `
           <tr>
-            <td>${escapeHtml(r.host)}</td>
+            <td><span class="host-chip">${hostDot(r.host)}<span>${escapeHtml(r.host)}</span></span></td>
             <td>${escapeHtml(r.device_type)}</td>
             <td>${fmtDuration(r.seconds)}</td>
             <td>${r.interval_count}</td>
@@ -493,7 +554,7 @@ HTML_PAGE = """
           <tr>
             <td>${escapeHtml(fmtLocalDateTime(r.clipped_start_time))}</td>
             <td>${escapeHtml(fmtLocalDateTime(r.clipped_end_time))}</td>
-            <td>${escapeHtml(r.host)}</td>
+            <td><span class="host-chip">${hostDot(r.host)}<span>${escapeHtml(r.host)}</span></span></td>
             <td>${escapeHtml(r.device_type)}</td>
             <td>${fmtDuration(r.duration_seconds)}</td>
           </tr>`).join('')}</tbody>
@@ -529,9 +590,9 @@ HTML_PAGE = """
         <div><strong>UTC window:</strong> ${escapeHtml(data.day_start_utc)} → ${escapeHtml(data.day_end_utc)}</div>`;
 
       renderTimeline(data);
-      renderBars(document.getElementById('hostBars'), data.per_host, r => r.key);
+      renderBars(document.getElementById('hostBars'), data.per_host, r => `${r.key}`, r => getHostColorPair(r.key)[1]);
       renderBars(document.getElementById('typeBars'), data.per_device_type, r => r.key);
-      renderBars(document.getElementById('deviceBars'), data.per_device, r => `${r.host} (${r.device_type})`);
+      renderBars(document.getElementById('deviceBars'), data.per_device, r => `${r.host} (${r.device_type})`, r => getHostColorPair(r.host)[1]);
       document.getElementById('deviceTable').innerHTML = renderDeviceTable(data.per_device);
       document.getElementById('intervalTable').innerHTML = renderIntervalTable(data.intervals);
       app.classList.remove('loading');
@@ -553,7 +614,14 @@ HTML_PAGE = """
       await loadSummary();
     }
 
+    function changeDay(offset) {
+      dayInput.value = shiftDay(dayInput.value, offset);
+      loadSummary();
+    }
+
     refreshBtn.addEventListener('click', loadSummary);
+    prevDayBtn.addEventListener('click', () => changeDay(-1));
+    nextDayBtn.addEventListener('click', () => changeDay(1));
     dayInput.addEventListener('change', loadSummary);
     hostSelect.addEventListener('change', loadSummary);
     deviceTypeSelect.addEventListener('change', loadSummary);
